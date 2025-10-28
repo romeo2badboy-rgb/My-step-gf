@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { VRMLoaderPlugin, VRMUtils } from 'https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.0/lib/three-vrm.module.min.js';
+import { VRMLoaderPlugin, VRMUtils, VRMExpressionPresetName } from 'https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.0/lib/three-vrm.module.min.js';
 
 // Scene Setup
 let scene, camera, renderer, controls;
@@ -11,10 +11,13 @@ let clock = new THREE.Clock();
 let currentEmotion = 'neutral';
 
 // Animation state
-let animationQueue = [];
 let isAnimating = false;
 let bones = {};
+let skeleton = null;
 let eyeBlinkInterval = null;
+
+// Store initial bone states
+let initialBoneStates = new Map();
 
 // Initialize Three.js scene
 function initScene() {
@@ -23,7 +26,7 @@ function initScene() {
 
     // Scene
     scene = new THREE.Scene();
-    scene.background = null; // Transparent background
+    scene.background = null;
 
     // Camera
     camera = new THREE.PerspectiveCamera(
@@ -45,7 +48,7 @@ function initScene() {
     renderer.outputEncoding = THREE.sRGBEncoding;
 
     // Lights
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
     scene.add(ambientLight);
 
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
@@ -106,25 +109,42 @@ async function loadVRMModel() {
     });
 
     try {
-        // Using a sample VRM model URL
-        // You can replace this with any VRM model URL
-        const modelUrl = 'https://cdn.jsdelivr.net/gh/pixiv/three-vrm@dev/packages/three-vrm/examples/models/VRM1_Constraint_Twist_Sample.vrm';
+        // Try multiple VRM sources
+        const modelUrls = [
+            'https://cdn.jsdelivr.net/gh/pixiv/three-vrm@dev/packages/three-vrm/examples/models/VRM1_Constraint_Twist_Sample.vrm',
+            'https://pixiv.github.io/three-vrm/packages/three-vrm/examples/models/three-vrm-girl.vrm'
+        ];
 
         document.getElementById('loading').textContent = 'Loading your waifu...';
 
-        const gltf = await loader.loadAsync(modelUrl);
+        let gltf = null;
+        for (const url of modelUrls) {
+            try {
+                console.log('Trying to load:', url);
+                gltf = await loader.loadAsync(url);
+                break;
+            } catch (e) {
+                console.log('Failed to load from', url);
+            }
+        }
+
+        if (!gltf) {
+            throw new Error('Could not load any VRM model');
+        }
 
         const vrm = gltf.userData.vrm;
 
         if (vrm) {
-            // Rotate model to face camera
-            VRMUtils.rotateVRM0(vrm);
+            // Rotate model to face camera (VRM0 format)
+            if (vrm.meta?.metaVersion === '0') {
+                VRMUtils.rotateVRM0(vrm);
+            }
 
             scene.add(vrm.scene);
             currentVRM = vrm;
 
             // Get bone references for animation
-            getBoneReferences();
+            setupVRMBones();
 
             // Setup animations
             setupAnimations();
@@ -132,188 +152,383 @@ async function loadVRMModel() {
             document.getElementById('loading').style.display = 'none';
             console.log('VRM model loaded successfully!');
             console.log('Available bones:', Object.keys(bones));
+            console.log('VRM has expressions:', vrm.expressionManager ? 'Yes' : 'No');
         }
     } catch (error) {
         console.error('Error loading VRM model:', error);
         document.getElementById('loading').textContent =
-            'Could not load model. Using fallback character...';
-        loadFallbackModel();
+            'Loading custom character...';
+        loadCustomRiggedCharacter();
     }
 }
 
-// Get bone references from VRM model
-function getBoneReferences() {
+// Setup VRM bones properly using humanoid interface
+function setupVRMBones() {
     if (!currentVRM || !currentVRM.humanoid) {
         console.log('No humanoid bones available');
         return;
     }
 
-    // Get humanoid bones
     const humanoid = currentVRM.humanoid;
-    const boneNames = [
-        'head', 'neck', 'chest', 'spine', 'hips',
-        'leftShoulder', 'leftUpperArm', 'leftLowerArm', 'leftHand',
-        'rightShoulder', 'rightUpperArm', 'rightLowerArm', 'rightHand',
-        'leftUpperLeg', 'leftLowerLeg', 'leftFoot',
-        'rightUpperLeg', 'rightLowerLeg', 'rightFoot',
-        'leftEye', 'rightEye'
-    ];
 
-    boneNames.forEach(boneName => {
-        const bone = humanoid.getRawBoneNode(boneName);
-        if (bone) {
-            bones[boneName] = bone;
-            // Store initial rotations
-            if (!bone.userData.initialRotation) {
-                bone.userData.initialRotation = bone.rotation.clone();
+    // Get all humanoid bones using proper VRM API
+    const boneNames = {
+        hips: 'hips',
+        spine: 'spine',
+        chest: 'chest',
+        neck: 'neck',
+        head: 'head',
+        leftShoulder: 'leftShoulder',
+        leftUpperArm: 'leftUpperArm',
+        leftLowerArm: 'leftLowerArm',
+        leftHand: 'leftHand',
+        rightShoulder: 'rightShoulder',
+        rightUpperArm: 'rightUpperArm',
+        rightLowerArm: 'rightLowerArm',
+        rightHand: 'rightHand',
+        leftUpperLeg: 'leftUpperLeg',
+        leftLowerLeg: 'leftLowerLeg',
+        leftFoot: 'leftFoot',
+        rightUpperLeg: 'rightUpperLeg',
+        rightLowerLeg: 'rightLowerLeg',
+        rightFoot: 'rightFoot',
+        leftEye: 'leftEye',
+        rightEye: 'rightEye'
+    };
+
+    Object.entries(boneNames).forEach(([key, boneName]) => {
+        const boneNode = humanoid.getNormalizedBoneNode(boneName);
+        if (boneNode) {
+            bones[key] = boneNode;
+            // Store initial state
+            if (!initialBoneStates.has(key)) {
+                initialBoneStates.set(key, {
+                    position: boneNode.position.clone(),
+                    rotation: boneNode.rotation.clone(),
+                    quaternion: boneNode.quaternion.clone()
+                });
             }
         }
     });
+
+    console.log('VRM bones setup complete:', Object.keys(bones).length, 'bones found');
 }
 
-// Fallback to a simple 3D character if VRM fails
-function loadFallbackModel() {
-    // Create a simple anime-style character using basic shapes
+// Load custom rigged character with proper skeletal system
+function loadCustomRiggedCharacter() {
     const characterGroup = new THREE.Group();
 
-    // Head
-    const headGeometry = new THREE.SphereGeometry(0.3, 32, 32);
+    // Create skeleton system
+    const rootBone = new THREE.Bone();
+    rootBone.position.set(0, 0, 0);
+    rootBone.name = 'root';
+
+    const hipsBone = new THREE.Bone();
+    hipsBone.position.set(0, 0.8, 0);
+    hipsBone.name = 'hips';
+    rootBone.add(hipsBone);
+
+    const spineBone = new THREE.Bone();
+    spineBone.position.set(0, 0.2, 0);
+    spineBone.name = 'spine';
+    hipsBone.add(spineBone);
+
+    const chestBone = new THREE.Bone();
+    chestBone.position.set(0, 0.15, 0);
+    chestBone.name = 'chest';
+    spineBone.add(chestBone);
+
+    const neckBone = new THREE.Bone();
+    neckBone.position.set(0, 0.25, 0);
+    neckBone.name = 'neck';
+    chestBone.add(neckBone);
+
+    const headBone = new THREE.Bone();
+    headBone.position.set(0, 0.1, 0);
+    headBone.name = 'head';
+    neckBone.add(headBone);
+
+    // LEFT ARM CHAIN
+    const leftShoulderBone = new THREE.Bone();
+    leftShoulderBone.position.set(-0.1, 0.2, 0);
+    leftShoulderBone.name = 'leftShoulder';
+    chestBone.add(leftShoulderBone);
+
+    const leftUpperArmBone = new THREE.Bone();
+    leftUpperArmBone.position.set(-0.15, 0, 0);
+    leftUpperArmBone.name = 'leftUpperArm';
+    leftShoulderBone.add(leftUpperArmBone);
+
+    const leftLowerArmBone = new THREE.Bone();
+    leftLowerArmBone.position.set(-0.25, 0, 0);
+    leftLowerArmBone.name = 'leftLowerArm';
+    leftUpperArmBone.add(leftLowerArmBone);
+
+    const leftHandBone = new THREE.Bone();
+    leftHandBone.position.set(-0.2, 0, 0);
+    leftHandBone.name = 'leftHand';
+    leftLowerArmBone.add(leftHandBone);
+
+    // RIGHT ARM CHAIN
+    const rightShoulderBone = new THREE.Bone();
+    rightShoulderBone.position.set(0.1, 0.2, 0);
+    rightShoulderBone.name = 'rightShoulder';
+    chestBone.add(rightShoulderBone);
+
+    const rightUpperArmBone = new THREE.Bone();
+    rightUpperArmBone.position.set(0.15, 0, 0);
+    rightUpperArmBone.name = 'rightUpperArm';
+    rightShoulderBone.add(rightUpperArmBone);
+
+    const rightLowerArmBone = new THREE.Bone();
+    rightLowerArmBone.position.set(0.25, 0, 0);
+    rightLowerArmBone.name = 'rightLowerArm';
+    rightUpperArmBone.add(rightLowerArmBone);
+
+    const rightHandBone = new THREE.Bone();
+    rightHandBone.position.set(0.2, 0, 0);
+    rightHandBone.name = 'rightHand';
+    rightLowerArmBone.add(rightHandBone);
+
+    // LEFT LEG CHAIN
+    const leftUpperLegBone = new THREE.Bone();
+    leftUpperLegBone.position.set(-0.1, -0.1, 0);
+    leftUpperLegBone.name = 'leftUpperLeg';
+    hipsBone.add(leftUpperLegBone);
+
+    const leftLowerLegBone = new THREE.Bone();
+    leftLowerLegBone.position.set(0, -0.4, 0);
+    leftLowerLegBone.name = 'leftLowerLeg';
+    leftUpperLegBone.add(leftLowerLegBone);
+
+    const leftFootBone = new THREE.Bone();
+    leftFootBone.position.set(0, -0.3, 0);
+    leftFootBone.name = 'leftFoot';
+    leftLowerLegBone.add(leftFootBone);
+
+    // RIGHT LEG CHAIN
+    const rightUpperLegBone = new THREE.Bone();
+    rightUpperLegBone.position.set(0.1, -0.1, 0);
+    rightUpperLegBone.name = 'rightUpperLeg';
+    hipsBone.add(rightUpperLegBone);
+
+    const rightLowerLegBone = new THREE.Bone();
+    rightLowerLegBone.position.set(0, -0.4, 0);
+    rightLowerLegBone.name = 'rightLowerLeg';
+    rightUpperLegBone.add(rightLowerLegBone);
+
+    const rightFootBone = new THREE.Bone();
+    rightFootBone.position.set(0, -0.3, 0);
+    rightFootBone.name = 'rightFoot';
+    rightLowerLegBone.add(rightFootBone);
+
+    // Create skeleton
+    const boneArray = [
+        rootBone, hipsBone, spineBone, chestBone, neckBone, headBone,
+        leftShoulderBone, leftUpperArmBone, leftLowerArmBone, leftHandBone,
+        rightShoulderBone, rightUpperArmBone, rightLowerArmBone, rightHandBone,
+        leftUpperLegBone, leftLowerLegBone, leftFootBone,
+        rightUpperLegBone, rightLowerLegBone, rightFootBone
+    ];
+
+    skeleton = new THREE.Skeleton(boneArray);
+
+    // Create skinned mesh for body
+    const bodyGeometry = new THREE.CylinderGeometry(0.2, 0.25, 0.6, 16);
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+        color: 0xff69b4,
+        skinning: true
+    });
+
+    // Add skinning data
+    const skinIndices = [];
+    const skinWeights = [];
+    const position = bodyGeometry.attributes.position;
+
+    for (let i = 0; i < position.count; i++) {
+        const y = position.getY(i);
+
+        // Weight distribution based on height
+        if (y > 0.2) {
+            // Upper body - chest bone
+            skinIndices.push(3, 2, 0, 0);
+            skinWeights.push(0.7, 0.3, 0, 0);
+        } else if (y > -0.1) {
+            // Mid body - spine bone
+            skinIndices.push(2, 1, 3, 0);
+            skinWeights.push(0.6, 0.3, 0.1, 0);
+        } else {
+            // Lower body - hips bone
+            skinIndices.push(1, 2, 0, 0);
+            skinWeights.push(0.8, 0.2, 0, 0);
+        }
+    }
+
+    bodyGeometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skinIndices, 4));
+    bodyGeometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(skinWeights, 4));
+
+    const bodyMesh = new THREE.SkinnedMesh(bodyGeometry, bodyMaterial);
+    bodyMesh.add(rootBone);
+    bodyMesh.bind(skeleton);
+    characterGroup.add(bodyMesh);
+
+    // Create head mesh
+    const headGeometry = new THREE.SphereGeometry(0.15, 32, 32);
     const skinMaterial = new THREE.MeshStandardMaterial({
         color: 0xffdbac,
         roughness: 0.6
     });
-    const head = new THREE.Mesh(headGeometry, skinMaterial);
-    head.position.y = 1.5;
-    head.userData.initialRotation = new THREE.Euler(0, 0, 0);
-    characterGroup.add(head);
+    const headMesh = new THREE.Mesh(headGeometry, skinMaterial);
+    headMesh.position.set(0, 0.15, 0);
+    headBone.add(headMesh);
 
-    // Eyes
-    const eyeGeometry = new THREE.SphereGeometry(0.05, 16, 16);
+    // Create eyes as separate objects (not scaled)
+    const eyeGeometry = new THREE.SphereGeometry(0.03, 16, 16);
     const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x000000 });
 
-    const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-    leftEye.position.set(-0.1, 1.55, 0.25);
-    leftEye.userData.initialScale = new THREE.Vector3(1, 1, 1);
-    characterGroup.add(leftEye);
+    const leftEyeMesh = new THREE.Mesh(eyeGeometry, eyeMaterial);
+    leftEyeMesh.position.set(-0.05, 0.18, 0.13);
+    leftEyeMesh.name = 'leftEye';
+    headBone.add(leftEyeMesh);
 
-    const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-    rightEye.position.set(0.1, 1.55, 0.25);
-    rightEye.userData.initialScale = new THREE.Vector3(1, 1, 1);
-    characterGroup.add(rightEye);
+    const rightEyeMesh = new THREE.Mesh(eyeGeometry, eyeMaterial);
+    rightEyeMesh.position.set(0.05, 0.18, 0.13);
+    rightEyeMesh.name = 'rightEye';
+    headBone.add(rightEyeMesh);
 
-    // Hair
-    const hairGeometry = new THREE.SphereGeometry(0.35, 32, 32, 0, Math.PI * 2, 0, Math.PI / 2);
-    const hairMaterial = new THREE.MeshStandardMaterial({
-        color: 0x4a3728,
-        roughness: 0.7
+    // Create eyelids for blinking
+    const eyelidGeometry = new THREE.SphereGeometry(0.032, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+    const eyelidMaterial = new THREE.MeshStandardMaterial({
+        color: 0xffdbac,
+        side: THREE.DoubleSide
     });
-    const hair = new THREE.Mesh(hairGeometry, hairMaterial);
-    hair.position.y = 1.65;
-    characterGroup.add(hair);
 
-    // Body
-    const bodyGeometry = new THREE.CylinderGeometry(0.25, 0.3, 0.8, 16);
-    const clothesMaterial = new THREE.MeshStandardMaterial({
-        color: 0xff69b4,
-        roughness: 0.6
-    });
-    const body = new THREE.Mesh(bodyGeometry, clothesMaterial);
-    body.position.y = 0.8;
-    characterGroup.add(body);
+    const leftEyelid = new THREE.Mesh(eyelidGeometry, eyelidMaterial);
+    leftEyelid.position.copy(leftEyeMesh.position);
+    leftEyelid.rotation.x = Math.PI;
+    leftEyelid.visible = false;
+    leftEyelid.name = 'leftEyelid';
+    headBone.add(leftEyelid);
 
-    // Left Arm (with bones for animation)
-    const leftArm = new THREE.Group();
-    const leftUpperArm = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.08, 0.08, 0.3, 8),
-        skinMaterial
-    );
-    leftUpperArm.position.set(-0.35, 1.05, 0);
-    leftUpperArm.userData.initialRotation = new THREE.Euler(0, 0, 0.3);
-    leftArm.add(leftUpperArm);
+    const rightEyelid = new THREE.Mesh(eyelidGeometry, eyelidMaterial);
+    rightEyelid.position.copy(rightEyeMesh.position);
+    rightEyelid.rotation.x = Math.PI;
+    rightEyelid.visible = false;
+    rightEyelid.name = 'rightEyelid';
+    headBone.add(rightEyelid);
 
-    const leftLowerArm = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.08, 0.06, 0.3, 8),
-        skinMaterial
-    );
-    leftLowerArm.position.set(-0.35, 0.65, 0);
-    leftLowerArm.userData.initialRotation = new THREE.Euler(0, 0, 0.3);
-    leftArm.add(leftLowerArm);
+    // Create arm meshes
+    const createArmMesh = (upperArmBone, lowerArmBone, handBone) => {
+        const armMaterial = new THREE.MeshStandardMaterial({ color: 0xffdbac });
 
-    const leftHand = new THREE.Mesh(
-        new THREE.SphereGeometry(0.08, 16, 16),
-        skinMaterial
-    );
-    leftHand.position.set(-0.35, 0.5, 0);
-    leftHand.userData.initialRotation = new THREE.Euler(0, 0, 0);
-    leftArm.add(leftHand);
+        const upperArmGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.25, 8);
+        const upperArmMesh = new THREE.Mesh(upperArmGeo, armMaterial);
+        upperArmMesh.position.set(-0.125, 0, 0);
+        upperArmMesh.rotation.z = Math.PI / 2;
+        upperArmBone.add(upperArmMesh);
 
-    characterGroup.add(leftArm);
+        const lowerArmGeo = new THREE.CylinderGeometry(0.035, 0.03, 0.2, 8);
+        const lowerArmMesh = new THREE.Mesh(lowerArmGeo, armMaterial);
+        lowerArmMesh.position.set(-0.1, 0, 0);
+        lowerArmMesh.rotation.z = Math.PI / 2;
+        lowerArmBone.add(lowerArmMesh);
 
-    // Right Arm (with bones for animation)
-    const rightArm = new THREE.Group();
-    const rightUpperArm = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.08, 0.08, 0.3, 8),
-        skinMaterial
-    );
-    rightUpperArm.position.set(0.35, 1.05, 0);
-    rightUpperArm.userData.initialRotation = new THREE.Euler(0, 0, -0.3);
-    rightArm.add(rightUpperArm);
+        const handGeo = new THREE.SphereGeometry(0.04, 16, 16);
+        const handMesh = new THREE.Mesh(handGeo, armMaterial);
+        handMesh.position.set(-0.05, 0, 0);
+        handBone.add(handMesh);
+    };
 
-    const rightLowerArm = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.08, 0.06, 0.3, 8),
-        skinMaterial
-    );
-    rightLowerArm.position.set(0.35, 0.65, 0);
-    rightLowerArm.userData.initialRotation = new THREE.Euler(0, 0, -0.3);
-    rightArm.add(rightLowerArm);
+    createArmMesh(leftUpperArmBone, leftLowerArmBone, leftHandBone);
+    createArmMesh(rightUpperArmBone, rightLowerArmBone, rightHandBone);
 
-    const rightHand = new THREE.Mesh(
-        new THREE.SphereGeometry(0.08, 16, 16),
-        skinMaterial
-    );
-    rightHand.position.set(0.35, 0.5, 0);
-    rightHand.userData.initialRotation = new THREE.Euler(0, 0, 0);
-    rightArm.add(rightHand);
+    // Create leg meshes
+    const createLegMesh = (upperLegBone, lowerLegBone, footBone) => {
+        const legMaterial = new THREE.MeshStandardMaterial({ color: 0xffdbac });
 
-    characterGroup.add(rightArm);
+        const upperLegGeo = new THREE.CylinderGeometry(0.05, 0.045, 0.4, 8);
+        const upperLegMesh = new THREE.Mesh(upperLegGeo, legMaterial);
+        upperLegMesh.position.set(0, -0.2, 0);
+        upperLegBone.add(upperLegMesh);
+
+        const lowerLegGeo = new THREE.CylinderGeometry(0.04, 0.035, 0.3, 8);
+        const lowerLegMesh = new THREE.Mesh(lowerLegGeo, legMaterial);
+        lowerLegMesh.position.set(0, -0.15, 0);
+        lowerLegBone.add(lowerLegMesh);
+
+        const footGeo = new THREE.BoxGeometry(0.08, 0.05, 0.12);
+        const footMesh = new THREE.Mesh(footGeo, legMaterial);
+        footMesh.position.set(0, -0.025, 0.03);
+        footBone.add(footMesh);
+    };
+
+    createLegMesh(leftUpperLegBone, leftLowerLegBone, leftFootBone);
+    createLegMesh(rightUpperLegBone, rightLowerLegBone, rightFootBone);
 
     scene.add(characterGroup);
 
-    // Create a fallback bone structure
+    // Store bone references
     bones = {
-        head: head,
-        leftEye: leftEye,
-        rightEye: rightEye,
-        leftUpperArm: leftUpperArm,
-        leftLowerArm: leftLowerArm,
-        leftHand: leftHand,
-        rightUpperArm: rightUpperArm,
-        rightLowerArm: rightLowerArm,
-        rightHand: rightHand
+        root: rootBone,
+        hips: hipsBone,
+        spine: spineBone,
+        chest: chestBone,
+        neck: neckBone,
+        head: headBone,
+        leftShoulder: leftShoulderBone,
+        leftUpperArm: leftUpperArmBone,
+        leftLowerArm: leftLowerArmBone,
+        leftHand: leftHandBone,
+        rightShoulder: rightShoulderBone,
+        rightUpperArm: rightUpperArmBone,
+        rightLowerArm: rightLowerArmBone,
+        rightHand: rightHandBone,
+        leftUpperLeg: leftUpperLegBone,
+        leftLowerLeg: leftLowerLegBone,
+        leftFoot: leftFootBone,
+        rightUpperLeg: rightUpperLegBone,
+        rightLowerLeg: rightLowerLegBone,
+        rightFoot: rightFootBone,
+        leftEye: leftEyeMesh,
+        rightEye: rightEyeMesh,
+        leftEyelid: leftEyelid,
+        rightEyelid: rightEyelid
     };
+
+    // Store initial states
+    Object.entries(bones).forEach(([key, bone]) => {
+        if (bone) {
+            initialBoneStates.set(key, {
+                position: bone.position.clone(),
+                rotation: bone.rotation.clone(),
+                quaternion: bone.quaternion.clone()
+            });
+        }
+    });
 
     currentVRM = {
         scene: characterGroup,
         humanoid: null,
-        update: () => {} // Empty update function
+        expressionManager: null,
+        update: (deltaTime) => {}
     };
 
     setupAnimations();
     document.getElementById('loading').style.display = 'none';
-    console.log('Fallback character loaded with bones:', Object.keys(bones));
+    console.log('Custom rigged character loaded with', Object.keys(bones).length, 'bones');
 }
 
 // Setup animations
 function setupAnimations() {
-    // Simple breathing/idle animation
+    // Breathing animation
     let breatheTime = 0;
 
     function breatheAnimation() {
         breatheTime += 0.016;
 
-        if (currentVRM && currentVRM.scene) {
-            const breatheScale = Math.sin(breatheTime * 2) * 0.01;
-            currentVRM.scene.position.y = breatheScale;
+        if (bones.chest) {
+            const breatheAmount = Math.sin(breatheTime * 2) * 0.02;
+            bones.chest.scale.set(1, 1 + breatheAmount, 1);
         }
 
         requestAnimationFrame(breatheAnimation);
@@ -321,7 +536,7 @@ function setupAnimations() {
 
     breatheAnimation();
 
-    // Start idle eye blinking
+    // Start idle blinking
     startIdleBlinking();
 }
 
@@ -335,55 +550,81 @@ function startIdleBlinking() {
         if (!isAnimating) {
             performBlink();
         }
-    }, 3000 + Math.random() * 2000); // Random blink every 3-5 seconds
+    }, 3000 + Math.random() * 2000);
 }
 
 function performBlink() {
-    if (!bones.leftEye && !bones.rightEye) return;
-
-    const blinkDuration = 150;
-
-    // Close eyes
-    animateEyes(0.1, blinkDuration / 2);
-
-    // Open eyes
-    setTimeout(() => {
-        animateEyes(1, blinkDuration / 2);
-    }, blinkDuration / 2);
+    blinkEyes(150);
 }
 
-function animateEyes(scaleY, duration) {
-    if (bones.leftEye) {
-        animateScale(bones.leftEye, { y: scaleY }, duration);
-    }
-    if (bones.rightEye) {
-        animateScale(bones.rightEye, { y: scaleY }, duration);
+// Proper eye blinking using eyelids or VRM expressions
+function blinkEyes(duration = 150) {
+    if (currentVRM && currentVRM.expressionManager) {
+        // Use VRM expression for blinking
+        currentVRM.expressionManager.setValue(VRMExpressionPresetName.Blink, 1.0);
+        setTimeout(() => {
+            currentVRM.expressionManager.setValue(VRMExpressionPresetName.Blink, 0.0);
+        }, duration);
+    } else if (bones.leftEyelid && bones.rightEyelid) {
+        // Use eyelids for custom character
+        bones.leftEyelid.visible = true;
+        bones.rightEyelid.visible = true;
+        bones.leftEye.visible = false;
+        bones.rightEye.visible = false;
+
+        setTimeout(() => {
+            bones.leftEyelid.visible = false;
+            bones.rightEyelid.visible = false;
+            bones.leftEye.visible = true;
+            bones.rightEye.visible = true;
+        }, duration);
     }
 }
 
-// Animation helper functions
-function animateBone(bone, targetRotation, duration = 500, easing = 'easeOutCubic') {
+function closeEyes() {
+    if (currentVRM && currentVRM.expressionManager) {
+        currentVRM.expressionManager.setValue(VRMExpressionPresetName.Blink, 1.0);
+    } else if (bones.leftEyelid && bones.rightEyelid) {
+        bones.leftEyelid.visible = true;
+        bones.rightEyelid.visible = true;
+        bones.leftEye.visible = false;
+        bones.rightEye.visible = false;
+    }
+}
+
+function openEyes() {
+    if (currentVRM && currentVRM.expressionManager) {
+        currentVRM.expressionManager.setValue(VRMExpressionPresetName.Blink, 0.0);
+    } else if (bones.leftEyelid && bones.rightEyelid) {
+        bones.leftEyelid.visible = false;
+        bones.rightEyelid.visible = false;
+        bones.leftEye.visible = true;
+        bones.rightEye.visible = true;
+    }
+}
+
+// Animation helper - rotate bone smoothly
+function animateBoneRotation(bone, targetRotation, duration = 500) {
     if (!bone) return Promise.resolve();
 
     return new Promise((resolve) => {
-        const startRotation = {
-            x: bone.rotation.x,
-            y: bone.rotation.y,
-            z: bone.rotation.z
-        };
+        const startRotation = bone.rotation.clone();
+        const target = new THREE.Euler(
+            targetRotation.x !== undefined ? targetRotation.x : startRotation.x,
+            targetRotation.y !== undefined ? targetRotation.y : startRotation.y,
+            targetRotation.z !== undefined ? targetRotation.z : startRotation.z
+        );
 
         const startTime = Date.now();
 
         function animate() {
             const elapsed = Date.now() - startTime;
             const progress = Math.min(elapsed / duration, 1);
+            const eased = 1 - Math.pow(1 - progress, 3); // easeOutCubic
 
-            // Apply easing
-            const eased = applyEasing(progress, easing);
-
-            bone.rotation.x = startRotation.x + (targetRotation.x - startRotation.x) * eased;
-            bone.rotation.y = startRotation.y + (targetRotation.y - startRotation.y) * eased;
-            bone.rotation.z = startRotation.z + (targetRotation.z - startRotation.z) * eased;
+            bone.rotation.x = startRotation.x + (target.x - startRotation.x) * eased;
+            bone.rotation.y = startRotation.y + (target.y - startRotation.y) * eased;
+            bone.rotation.z = startRotation.z + (target.z - startRotation.z) * eased;
 
             if (progress < 1) {
                 requestAnimationFrame(animate);
@@ -396,64 +637,17 @@ function animateBone(bone, targetRotation, duration = 500, easing = 'easeOutCubi
     });
 }
 
-function animateScale(object, targetScale, duration = 500) {
-    if (!object) return Promise.resolve();
+function resetBone(boneName, duration = 500) {
+    const bone = bones[boneName];
+    if (!bone) return Promise.resolve();
 
-    return new Promise((resolve) => {
-        const startScale = {
-            x: object.scale.x,
-            y: object.scale.y,
-            z: object.scale.z
-        };
+    const initialState = initialBoneStates.get(boneName);
+    if (!initialState) return Promise.resolve();
 
-        const target = {
-            x: targetScale.x !== undefined ? targetScale.x : startScale.x,
-            y: targetScale.y !== undefined ? targetScale.y : startScale.y,
-            z: targetScale.z !== undefined ? targetScale.z : startScale.z
-        };
-
-        const startTime = Date.now();
-
-        function animate() {
-            const elapsed = Date.now() - startTime;
-            const progress = Math.min(elapsed / duration, 1);
-
-            object.scale.x = startScale.x + (target.x - startScale.x) * progress;
-            object.scale.y = startScale.y + (target.y - startScale.y) * progress;
-            object.scale.z = startScale.z + (target.z - startScale.z) * progress;
-
-            if (progress < 1) {
-                requestAnimationFrame(animate);
-            } else {
-                resolve();
-            }
-        }
-
-        animate();
-    });
-}
-
-function applyEasing(t, type) {
-    switch (type) {
-        case 'easeOutCubic':
-            return 1 - Math.pow(1 - t, 3);
-        case 'easeInOutCubic':
-            return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-        case 'easeOutElastic':
-            const c4 = (2 * Math.PI) / 3;
-            return t === 0 ? 0 : t === 1 ? 1 : Math.pow(2, -10 * t) * Math.sin((t * 10 - 0.75) * c4) + 1;
-        default:
-            return t; // linear
-    }
-}
-
-function resetBone(bone, duration = 500) {
-    if (!bone || !bone.userData.initialRotation) return Promise.resolve();
-
-    return animateBone(bone, {
-        x: bone.userData.initialRotation.x,
-        y: bone.userData.initialRotation.y,
-        z: bone.userData.initialRotation.z
+    return animateBoneRotation(bone, {
+        x: initialState.rotation.x,
+        y: initialState.rotation.y,
+        z: initialState.rotation.z
     }, duration);
 }
 
@@ -461,273 +655,238 @@ function resetBone(bone, duration = 500) {
 const actionAnimations = {
     wave_hand: async () => {
         console.log('Waving hand');
-        const hand = bones.rightHand || bones.rightLowerArm || bones.rightUpperArm;
-        if (!hand) return;
+
+        // Raise arm
+        await animateBoneRotation(bones.rightUpperArm, { x: 0, y: 0, z: -Math.PI / 2 }, 400);
+        await animateBoneRotation(bones.rightLowerArm, { x: 0, y: 0, z: -Math.PI / 4 }, 300);
 
         // Wave motion
         for (let i = 0; i < 3; i++) {
-            await animateBone(hand, { x: 0, y: 0, z: -1.2 }, 200);
-            await animateBone(hand, { x: 0, y: 0, z: -0.8 }, 200);
+            await animateBoneRotation(bones.rightLowerArm, { z: -Math.PI / 6 }, 200);
+            await animateBoneRotation(bones.rightLowerArm, { z: -Math.PI / 3 }, 200);
         }
-        await resetBone(hand, 400);
+
+        // Lower arm
+        await resetBone('rightLowerArm', 300);
+        await resetBone('rightUpperArm', 400);
     },
 
     raise_hand: async () => {
         console.log('Raising hand');
-        const arm = bones.rightUpperArm;
-        if (!arm) return;
-
-        await animateBone(arm, { x: 0, y: 0, z: -2.5 }, 500);
+        await animateBoneRotation(bones.rightUpperArm, { x: 0, y: 0, z: -Math.PI }, 500);
         await new Promise(resolve => setTimeout(resolve, 1000));
-        await resetBone(arm, 500);
+        await resetBone('rightUpperArm', 500);
     },
 
     both_hands_up: async () => {
         console.log('Both hands up');
-        const leftArm = bones.leftUpperArm;
-        const rightArm = bones.rightUpperArm;
-
         await Promise.all([
-            leftArm ? animateBone(leftArm, { x: 0, y: 0, z: 2.5 }, 500) : null,
-            rightArm ? animateBone(rightArm, { x: 0, y: 0, z: -2.5 }, 500) : null
+            animateBoneRotation(bones.leftUpperArm, { x: 0, y: 0, z: Math.PI }, 500),
+            animateBoneRotation(bones.rightUpperArm, { x: 0, y: 0, z: -Math.PI }, 500)
         ]);
-
         await new Promise(resolve => setTimeout(resolve, 1000));
-
         await Promise.all([
-            leftArm ? resetBone(leftArm, 500) : null,
-            rightArm ? resetBone(rightArm, 500) : null
+            resetBone('leftUpperArm', 500),
+            resetBone('rightUpperArm', 500)
         ]);
     },
 
     point: async () => {
         console.log('Pointing');
-        const arm = bones.rightUpperArm;
-        const hand = bones.rightHand;
-
-        if (arm) await animateBone(arm, { x: 0, y: 0.5, z: -1.5 }, 500);
-        if (hand) await animateBone(hand, { x: 0, y: 0, z: -0.3 }, 300);
+        await animateBoneRotation(bones.rightUpperArm, { x: 0, y: 0.3, z: -Math.PI / 3 }, 500);
+        await animateBoneRotation(bones.rightLowerArm, { x: 0, y: 0, z: 0 }, 300);
         await new Promise(resolve => setTimeout(resolve, 1500));
-        if (arm) await resetBone(arm, 500);
-        if (hand) await resetBone(hand, 300);
-    },
-
-    cover_mouth: async () => {
-        console.log('Covering mouth');
-        const arm = bones.rightUpperArm;
-        const lowerArm = bones.rightLowerArm;
-
-        if (arm) await animateBone(arm, { x: 0.3, y: 0.5, z: -1.8 }, 500);
-        if (lowerArm) await animateBone(lowerArm, { x: -0.5, y: 0, z: 0 }, 500);
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        if (arm) await resetBone(arm, 500);
-        if (lowerArm) await resetBone(lowerArm, 500);
-    },
-
-    hand_on_chest: async () => {
-        console.log('Hand on chest');
-        const arm = bones.rightUpperArm;
-
-        if (arm) await animateBone(arm, { x: 0.2, y: 0.3, z: -1.2 }, 600);
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        if (arm) await resetBone(arm, 600);
-    },
-
-    thumbs_up: async () => {
-        console.log('Thumbs up');
-        const arm = bones.rightUpperArm;
-        const hand = bones.rightHand;
-
-        if (arm) await animateBone(arm, { x: 0, y: 0.2, z: -1.5 }, 500);
-        if (hand) await animateBone(hand, { x: 0, y: 0, z: 0.3 }, 300);
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        if (arm) await resetBone(arm, 500);
-        if (hand) await resetBone(hand, 300);
-    },
-
-    peace_sign: async () => {
-        console.log('Peace sign');
-        const arm = bones.rightUpperArm;
-        const hand = bones.rightHand;
-
-        if (arm) await animateBone(arm, { x: 0.3, y: 0.5, z: -2.0 }, 500);
-        if (hand) await animateBone(hand, { x: 0, y: 0.3, z: 0 }, 300);
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        if (arm) await resetBone(arm, 500);
-        if (hand) await resetBone(hand, 300);
+        await resetBone('rightLowerArm', 300);
+        await resetBone('rightUpperArm', 500);
     },
 
     clap: async () => {
         console.log('Clapping');
-        const leftArm = bones.leftUpperArm;
-        const rightArm = bones.rightUpperArm;
+        // Bring arms to clapping position
+        await Promise.all([
+            animateBoneRotation(bones.leftUpperArm, { x: 0, y: 0.5, z: Math.PI / 3 }, 300),
+            animateBoneRotation(bones.rightUpperArm, { x: 0, y: -0.5, z: -Math.PI / 3 }, 300)
+        ]);
 
-        // Clap 3 times
-        for (let i = 0; i < 3; i++) {
+        // Clap motion
+        for (let i = 0; i < 5; i++) {
             await Promise.all([
-                leftArm ? animateBone(leftArm, { x: 0, y: 0.5, z: 1.2 }, 200) : null,
-                rightArm ? animateBone(rightArm, { x: 0, y: 0.5, z: -1.2 }, 200) : null
+                animateBoneRotation(bones.leftUpperArm, { y: 0.3 }, 100),
+                animateBoneRotation(bones.rightUpperArm, { y: -0.3 }, 100)
             ]);
             await Promise.all([
-                leftArm ? animateBone(leftArm, { x: 0, y: 0, z: 0.8 }, 150) : null,
-                rightArm ? animateBone(rightArm, { x: 0, y: 0, z: -0.8 }, 150) : null
+                animateBoneRotation(bones.leftUpperArm, { y: 0.5 }, 100),
+                animateBoneRotation(bones.rightUpperArm, { y: -0.5 }, 100)
             ]);
         }
 
         await Promise.all([
-            leftArm ? resetBone(leftArm, 400) : null,
-            rightArm ? resetBone(rightArm, 400) : null
+            resetBone('leftUpperArm', 400),
+            resetBone('rightUpperArm', 400)
         ]);
     },
 
     blow_kiss: async () => {
         console.log('Blowing kiss');
-        const arm = bones.rightUpperArm;
-        const hand = bones.rightHand;
-
         // Hand to mouth
-        if (arm) await animateBone(arm, { x: 0.2, y: 0.5, z: -1.8 }, 500);
-        if (hand) await animateBone(hand, { x: 0, y: 0, z: -0.3 }, 300);
+        await animateBoneRotation(bones.rightUpperArm, { x: 0.3, y: -0.3, z: -Math.PI / 2 }, 500);
+        await animateBoneRotation(bones.rightLowerArm, { x: -0.5, y: 0, z: 0 }, 300);
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        // Blow kiss forward
-        if (arm) await animateBone(arm, { x: 0, y: 0.3, z: -1.5 }, 400);
-        if (hand) await animateBone(hand, { x: 0, y: 0, z: 0.2 }, 300);
+        // Extend arm forward
+        await animateBoneRotation(bones.rightUpperArm, { x: 0, y: 0.3, z: -Math.PI / 3 }, 400);
+        await animateBoneRotation(bones.rightLowerArm, { x: 0, y: 0, z: 0 }, 300);
         await new Promise(resolve => setTimeout(resolve, 800));
 
-        if (arm) await resetBone(arm, 500);
-        if (hand) await resetBone(hand, 300);
+        await resetBone('rightLowerArm', 300);
+        await resetBone('rightUpperArm', 500);
     },
 
     blink: async () => {
         console.log('Blinking');
-        performBlink();
+        blinkEyes(150);
         await new Promise(resolve => setTimeout(resolve, 200));
     },
 
     close_eyes: async () => {
         console.log('Closing eyes');
-        animateEyes(0.1, 300);
+        closeEyes();
         await new Promise(resolve => setTimeout(resolve, 2000));
-        animateEyes(1, 300);
+        openEyes();
     },
 
     wink: async () => {
         console.log('Winking');
-        if (bones.rightEye) {
-            animateScale(bones.rightEye, { y: 0.1 }, 150);
+        if (currentVRM && currentVRM.expressionManager) {
+            currentVRM.expressionManager.setValue('blinkLeft', 1.0);
             await new Promise(resolve => setTimeout(resolve, 400));
-            animateScale(bones.rightEye, { y: 1 }, 150);
+            currentVRM.expressionManager.setValue('blinkLeft', 0.0);
+        } else if (bones.rightEyelid) {
+            bones.rightEyelid.visible = true;
+            bones.rightEye.visible = false;
+            await new Promise(resolve => setTimeout(resolve, 400));
+            bones.rightEyelid.visible = false;
+            bones.rightEye.visible = true;
         }
-    },
-
-    look_left: async () => {
-        console.log('Looking left');
-        const head = bones.head;
-        if (head) await animateBone(head, { x: 0, y: 0.5, z: 0 }, 500);
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        if (head) await resetBone(head, 500);
-    },
-
-    look_right: async () => {
-        console.log('Looking right');
-        const head = bones.head;
-        if (head) await animateBone(head, { x: 0, y: -0.5, z: 0 }, 500);
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        if (head) await resetBone(head, 500);
-    },
-
-    look_up: async () => {
-        console.log('Looking up');
-        const head = bones.head;
-        if (head) await animateBone(head, { x: 0.3, y: 0, z: 0 }, 500);
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        if (head) await resetBone(head, 500);
-    },
-
-    look_down: async () => {
-        console.log('Looking down');
-        const head = bones.head;
-        if (head) await animateBone(head, { x: -0.3, y: 0, z: 0 }, 500);
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        if (head) await resetBone(head, 500);
     },
 
     nod: async () => {
         console.log('Nodding');
-        const head = bones.head;
-        if (!head) return;
-
         for (let i = 0; i < 3; i++) {
-            await animateBone(head, { x: 0.3, y: 0, z: 0 }, 200);
-            await animateBone(head, { x: -0.1, y: 0, z: 0 }, 200);
+            await animateBoneRotation(bones.head, { x: 0.3, y: 0, z: 0 }, 200);
+            await animateBoneRotation(bones.head, { x: -0.1, y: 0, z: 0 }, 200);
         }
-        await resetBone(head, 300);
+        await resetBone('head', 300);
     },
 
     shake_head: async () => {
         console.log('Shaking head');
-        const head = bones.head;
-        if (!head) return;
-
         for (let i = 0; i < 3; i++) {
-            await animateBone(head, { x: 0, y: 0.4, z: 0 }, 200);
-            await animateBone(head, { x: 0, y: -0.4, z: 0 }, 200);
+            await animateBoneRotation(bones.head, { x: 0, y: 0.4, z: 0 }, 200);
+            await animateBoneRotation(bones.head, { x: 0, y: -0.4, z: 0 }, 200);
         }
-        await resetBone(head, 300);
+        await resetBone('head', 300);
+    },
+
+    look_left: async () => {
+        console.log('Looking left');
+        await animateBoneRotation(bones.head, { x: 0, y: 0.6, z: 0 }, 500);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        await resetBone('head', 500);
+    },
+
+    look_right: async () => {
+        console.log('Looking right');
+        await animateBoneRotation(bones.head, { x: 0, y: -0.6, z: 0 }, 500);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        await resetBone('head', 500);
+    },
+
+    look_up: async () => {
+        console.log('Looking up');
+        await animateBoneRotation(bones.head, { x: 0.4, y: 0, z: 0 }, 500);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        await resetBone('head', 500);
+    },
+
+    look_down: async () => {
+        console.log('Looking down');
+        await animateBoneRotation(bones.head, { x: -0.4, y: 0, z: 0 }, 500);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        await resetBone('head', 500);
     },
 
     tilt_head: async () => {
         console.log('Tilting head');
-        const head = bones.head;
-        if (head) await animateBone(head, { x: 0.2, y: 0, z: 0.3 }, 500);
+        await animateBoneRotation(bones.head, { x: 0.2, y: 0, z: 0.4 }, 500);
         await new Promise(resolve => setTimeout(resolve, 1500));
-        if (head) await resetBone(head, 500);
+        await resetBone('head', 500);
     },
 
     jump: async () => {
         console.log('Jumping');
         if (!currentVRM) return;
 
-        const scene = currentVRM.scene;
-        const startY = scene.position.y;
+        const jumpHeight = 0.3;
+        const duration = 600;
+        const rootPos = bones.root ? bones.root.position : currentVRM.scene.position;
+        const startY = rootPos.y;
+        const startTime = Date.now();
 
-        // Jump up
-        const jumpAnimation = () => {
-            return new Promise((resolve) => {
-                const jumpHeight = 0.3;
-                const duration = 500;
-                const startTime = Date.now();
+        return new Promise((resolve) => {
+            function animate() {
+                const elapsed = Date.now() - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const jumpProgress = Math.sin(progress * Math.PI);
 
-                function animate() {
-                    const elapsed = Date.now() - startTime;
-                    const progress = Math.min(elapsed / duration, 1);
+                rootPos.y = startY + jumpProgress * jumpHeight;
 
-                    // Parabolic jump
-                    const jumpProgress = Math.sin(progress * Math.PI);
-                    scene.position.y = startY + jumpProgress * jumpHeight;
-
-                    if (progress < 1) {
-                        requestAnimationFrame(animate);
-                    } else {
-                        scene.position.y = startY;
-                        resolve();
-                    }
+                if (progress < 1) {
+                    requestAnimationFrame(animate);
+                } else {
+                    rootPos.y = startY;
+                    resolve();
                 }
+            }
+            animate();
+        });
+    },
 
-                animate();
-            });
-        };
+    walk_forward: async () => {
+        console.log('Walking forward');
+        const steps = 4;
+        for (let i = 0; i < steps; i++) {
+            // Left leg forward
+            await Promise.all([
+                animateBoneRotation(bones.leftUpperLeg, { x: 0.5, y: 0, z: 0 }, 200),
+                animateBoneRotation(bones.rightUpperLeg, { x: -0.3, y: 0, z: 0 }, 200),
+                animateBoneRotation(bones.leftUpperArm, { x: -0.3, y: 0, z: 0 }, 200),
+                animateBoneRotation(bones.rightUpperArm, { x: 0.3, y: 0, z: 0 }, 200)
+            ]);
 
-        await jumpAnimation();
+            // Right leg forward
+            await Promise.all([
+                animateBoneRotation(bones.leftUpperLeg, { x: -0.3, y: 0, z: 0 }, 200),
+                animateBoneRotation(bones.rightUpperLeg, { x: 0.5, y: 0, z: 0 }, 200),
+                animateBoneRotation(bones.leftUpperArm, { x: 0.3, y: 0, z: 0 }, 200),
+                animateBoneRotation(bones.rightUpperArm, { x: -0.3, y: 0, z: 0 }, 200)
+            ]);
+        }
+
+        await Promise.all([
+            resetBone('leftUpperLeg', 300),
+            resetBone('rightUpperLeg', 300),
+            resetBone('leftUpperArm', 300),
+            resetBone('rightUpperArm', 300)
+        ]);
     },
 
     spin: async () => {
         console.log('Spinning');
-        if (!currentVRM) return;
+        const spinBone = bones.hips || bones.root;
+        if (!spinBone) return;
 
-        const scene = currentVRM.scene;
-        const startRotation = scene.rotation.y;
+        const startRotation = spinBone.rotation.y;
         const duration = 1000;
         const startTime = Date.now();
 
@@ -736,44 +895,24 @@ const actionAnimations = {
                 const elapsed = Date.now() - startTime;
                 const progress = Math.min(elapsed / duration, 1);
 
-                scene.rotation.y = startRotation + (Math.PI * 2 * progress);
+                spinBone.rotation.y = startRotation + (Math.PI * 2 * progress);
 
                 if (progress < 1) {
                     requestAnimationFrame(animate);
                 } else {
-                    scene.rotation.y = startRotation;
+                    spinBone.rotation.y = startRotation;
                     resolve();
                 }
             }
-
             animate();
         });
     },
 
-    lean_forward: async () => {
-        console.log('Leaning forward');
-        if (!currentVRM) return;
-
-        const scene = currentVRM.scene;
-        await animateBone(scene, { x: 0.2, y: 0, z: 0 }, 500);
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        await animateBone(scene, { x: 0, y: 0, z: 0 }, 500);
-    },
-
-    lean_back: async () => {
-        console.log('Leaning back');
-        if (!currentVRM) return;
-
-        const scene = currentVRM.scene;
-        await animateBone(scene, { x: -0.2, y: 0, z: 0 }, 500);
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        await animateBone(scene, { x: 0, y: 0, z: 0 }, 500);
-    },
-
     idle: async () => {
         console.log('Returning to idle');
-        // Reset all bones to initial positions
-        const resetPromises = Object.values(bones).map(bone => resetBone(bone, 500));
+        const resetPromises = Object.keys(bones)
+            .filter(key => !key.includes('eye') && !key.includes('eyelid'))
+            .map(key => resetBone(key, 500));
         await Promise.all(resetPromises);
     }
 };
@@ -800,12 +939,12 @@ async function playActions(actions) {
     isAnimating = false;
 }
 
-// Play emotion animation
+// Play emotion
 function playEmotion(emotion) {
     currentEmotion = emotion;
 
     const emotionIndicator = document.getElementById('emotion-indicator');
-    emotionIndicator.textContent = `Emotion: ${emotion}`;
+    emotionIndicator.textContent = `${emotion}`;
     emotionIndicator.style.display = 'block';
 
     setTimeout(() => {
@@ -849,11 +988,8 @@ async function sendMessage() {
     const message = chatInput.value.trim();
     if (!message) return;
 
-    // Add user message to chat
     addMessage(message, true);
     chatInput.value = '';
-
-    // Show typing indicator
     showTypingIndicator();
 
     try {
@@ -866,7 +1002,6 @@ async function sendMessage() {
         });
 
         const data = await response.json();
-
         removeTypingIndicator();
 
         if (data.error) {
@@ -875,7 +1010,6 @@ async function sendMessage() {
             addMessage(data.response, false);
             playEmotion(data.emotion);
 
-            // Play actions if any
             if (data.actions && data.actions.length > 0) {
                 console.log('Playing actions:', data.actions);
                 playActions(data.actions);
@@ -892,7 +1026,7 @@ async function resetConversation() {
     try {
         await fetch('/api/reset', { method: 'POST' });
         chatMessages.innerHTML = '';
-        addMessage('Hi! I\'m your AI waifu companion! I can move my body now! How can I make you smile today?', false);
+        addMessage('Hi! I can move my entire body now - arms, legs, hands, and eyes! Ask me to do something!', false);
         playEmotion('happy');
         playActions(['wave_hand']);
     } catch (error) {
@@ -915,7 +1049,7 @@ loadVRMModel();
 
 // Initial greeting
 setTimeout(() => {
-    addMessage('Hi! I\'m your AI waifu companion! I can move my body now! How can I make you smile today?', false);
+    addMessage('Hi! I can move my entire body now - arms, legs, hands, and eyes! Ask me to do something!', false);
     playEmotion('happy');
     playActions(['wave_hand']);
 }, 1000);

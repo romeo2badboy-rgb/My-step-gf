@@ -44,12 +44,8 @@ Available emotions: neutral, happy, excited, shy, thinking, surprised, sad, lovi
 Available actions:
 - wave_hand: Wave your hand
 - raise_hand: Raise your hand up
-- point: Point at something
-- thumbs_up: Give a thumbs up
-- peace_sign: Make a peace sign
-- cover_mouth: Cover mouth when laughing/surprised
-- hand_on_chest: Put hand on chest
 - both_hands_up: Raise both hands up
+- point: Point at something
 - clap: Clap your hands
 - blow_kiss: Blow a kiss
 - blink: Blink your eyes
@@ -63,9 +59,8 @@ Available actions:
 - shake_head: Shake your head
 - tilt_head: Tilt head cutely
 - jump: Jump excitedly
+- walk_forward: Walk forward
 - spin: Spin around
-- lean_forward: Lean forward
-- lean_back: Lean back
 - idle: Return to normal idle pose
 
 You can use multiple actions separated by commas: [ACTION: wave_hand, blink]
