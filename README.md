@@ -6,8 +6,11 @@ A beautiful 3D anime waifu character powered by Google's Gemini 2.5 Flash AI! Ch
 
 - **3D Character**: VRM-compatible 3D anime character with full animation support
 - **AI-Powered**: Uses Gemini 2.5 Flash for natural, personality-driven conversations
+- **Full Body Control**: AI can control individual body parts (hands, eyes, head, arms)
+- **25+ Actions**: Wave, point, clap, blow kiss, nod, blink, wink, jump, spin, and more!
 - **Emotion System**: Character displays emotions (happy, excited, shy, thinking, surprised, sad, loving) based on AI responses
 - **VTuber-Style**: Real-time character animations synced with AI personality
+- **Automatic Eye Blinking**: Natural idle blinking animation
 - **Beautiful UI**: Modern, gradient-based chat interface
 - **Responsive**: Works on desktop and mobile devices
 
@@ -70,6 +73,45 @@ http://localhost:3000
 7. Click "Create Web Service"
 
 Your waifu will be live in minutes!
+
+## Available Actions
+
+Your waifu can perform these actions when you ask her to:
+
+**Hand Gestures:**
+- Wave hand
+- Raise hand
+- Point
+- Thumbs up
+- Peace sign
+- Both hands up
+- Clap
+- Cover mouth
+- Hand on chest
+- Blow kiss
+
+**Eye Movements:**
+- Blink
+- Close eyes
+- Wink
+
+**Head Movements:**
+- Look left/right/up/down
+- Nod
+- Shake head
+- Tilt head
+
+**Body Movements:**
+- Jump
+- Spin
+- Lean forward/back
+- Return to idle pose
+
+Just ask her naturally! Examples:
+- "Can you wave at me?"
+- "Please close your eyes"
+- "Can you clap for me?"
+- "Nod if you understand"
 
 ## Customization
 
