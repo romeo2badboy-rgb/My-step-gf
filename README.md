@@ -10,9 +10,9 @@ quaternion-based keyframe animation, and a Node backend.
 <img src="https://img.shields.io/badge/Three.js-000000?style=for-the-badge&logo=threedotjs&logoColor=white" />
 <img src="https://img.shields.io/badge/Gemini-8E75B2?style=for-the-badge&logo=googlegemini&logoColor=white" />
 
-<img src="https://img.shields.io/github/languages/top/romeo2badboy-rgb/ai-wifu?style=flat-square&color=F7DF1E" />
-<img src="https://img.shields.io/github/repo-size/romeo2badboy-rgb/ai-wifu?style=flat-square" />
-<img src="https://img.shields.io/github/last-commit/romeo2badboy-rgb/ai-wifu?style=flat-square" />
+<img src="https://img.shields.io/github/languages/top/romeo2badboy-rgb/ai-vtuber?style=flat-square&color=F7DF1E" />
+<img src="https://img.shields.io/github/repo-size/romeo2badboy-rgb/ai-vtuber?style=flat-square" />
+<img src="https://img.shields.io/github/last-commit/romeo2badboy-rgb/ai-vtuber?style=flat-square" />
 
 </div>
 
