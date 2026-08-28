@@ -1,197 +1,31 @@
-# AI Waifu VTuber - Gemini Powered 3D Character
+<div align="center">
 
-A beautiful 3D anime waifu character powered by Google's Gemini 2.5 Flash AI! Chat with your waifu and watch her express emotions through animations like a real VTuber.
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=26&duration=3200&pause=900&color=58A6FF&center=true&vCenter=true&width=680&height=60&lines=AI+Waifu+VTuber;Gemini-Controlled+3D+Character" alt="typing" />
 
-## Features
+A browser-based 3D character driven by Gemini AI, with a skeletal rig,
+quaternion-based keyframe animation, and a Node backend.
 
-- **3D Character**: VRM-compatible 3D anime character with full animation support
-- **AI-Powered**: Uses Gemini 2.5 Flash for natural, personality-driven conversations
-- **Full Body Control**: AI can control individual body parts (hands, eyes, head, arms)
-- **25+ Actions**: Wave, point, clap, blow kiss, nod, blink, wink, jump, spin, and more!
-- **Emotion System**: Character displays emotions (happy, excited, shy, thinking, surprised, sad, loving) based on AI responses
-- **VTuber-Style**: Real-time character animations synced with AI personality
-- **Automatic Eye Blinking**: Natural idle blinking animation
-- **Beautiful UI**: Modern, gradient-based chat interface
-- **Responsive**: Works on desktop and mobile devices
+<img src="https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" />
+<img src="https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black" />
+<img src="https://img.shields.io/badge/Three.js-000000?style=for-the-badge&logo=threedotjs&logoColor=white" />
+<img src="https://img.shields.io/badge/Gemini-8E75B2?style=for-the-badge&logo=googlegemini&logoColor=white" />
 
-## Tech Stack
+<img src="https://img.shields.io/github/languages/top/romeo2badboy-rgb/ai-wifu?style=flat-square&color=F7DF1E" />
+<img src="https://img.shields.io/github/repo-size/romeo2badboy-rgb/ai-wifu?style=flat-square" />
+<img src="https://img.shields.io/github/last-commit/romeo2badboy-rgb/ai-wifu?style=flat-square" />
 
-- **Frontend**: Three.js, VRM (Virtual Reality Model)
-- **Backend**: Node.js, Express
-- **AI**: Google Gemini 2.5 Flash
-- **Deployment**: Render (or any Node.js hosting)
+</div>
 
-## Setup
+## Overview
 
-### Prerequisites
+An Express server connects a 3D front end to Gemini, translating model
+responses into full-body animation via a keyframe track and quaternion
+rotations. Ships with 25+ animations and skeletal controls.
 
-- Node.js 18+ installed
-- Google Gemini API key
+## Getting started
 
-### Installation
-
-1. Clone the repository:
-```bash
-git clone <your-repo-url>
-cd My-step-gf
-```
-
-2. Install dependencies:
 ```bash
 npm install
+cp .env.example .env   # add GEMINI_API_KEY
+node server.js
 ```
-
-3. Create a `.env` file:
-```bash
-cp .env.example .env
-```
-
-4. Add your Gemini API key to `.env`:
-```
-GEMINI_API_KEY=your_api_key_here
-PORT=3000
-```
-
-5. Run the application:
-```bash
-npm start
-```
-
-6. Open your browser and visit:
-```
-http://localhost:3000
-```
-
-## Deploy to Render
-
-1. Push your code to GitHub
-2. Go to [Render Dashboard](https://dashboard.render.com/)
-3. Click "New +" and select "Web Service"
-4. Connect your GitHub repository
-5. Render will automatically detect the `render.yaml` configuration
-6. Add your `GEMINI_API_KEY` in the Environment Variables section
-7. Click "Create Web Service"
-
-Your waifu will be live in minutes!
-
-## Available Actions
-
-Your waifu can perform these actions when you ask her to:
-
-**Hand Gestures:**
-- Wave hand
-- Raise hand
-- Point
-- Thumbs up
-- Peace sign
-- Both hands up
-- Clap
-- Cover mouth
-- Hand on chest
-- Blow kiss
-
-**Eye Movements:**
-- Blink
-- Close eyes
-- Wink
-
-**Head Movements:**
-- Look left/right/up/down
-- Nod
-- Shake head
-- Tilt head
-
-**Body Movements:**
-- Jump
-- Spin
-- Lean forward/back
-- Return to idle pose
-
-Just ask her naturally! Examples:
-- "Can you wave at me?"
-- "Please close your eyes"
-- "Can you clap for me?"
-- "Nod if you understand"
-
-## Customization
-
-### Change the 3D Model
-
-Replace the VRM model URL in `public/js/main.js`:
-
-```javascript
-const modelUrl = 'YOUR_VRM_MODEL_URL_HERE';
-```
-
-You can find free VRM models at:
-- [VRoid Hub](https://hub.vroid.com/)
-- [Live3D](https://live3d.io/vroid_model)
-- [Sketchfab](https://sketchfab.com/tags/vrm)
-
-### Customize AI Personality
-
-Edit the `SYSTEM_PROMPT` in `server.js` to change your waifu's personality:
-
-```javascript
-const SYSTEM_PROMPT = `You are a friendly and cute anime waifu character...`;
-```
-
-### Add More Emotions
-
-Add new emotions in both files:
-
-1. `server.js` - Add to available emotions list
-2. `public/js/main.js` - Add to `getEmotionRotation()` function
-
-## API Endpoints
-
-- `POST /api/chat` - Send a message to the AI
-- `POST /api/reset` - Reset the conversation
-- `GET /api/health` - Health check
-
-## Project Structure
-
-```
-My-step-gf/
-├── public/
-│   ├── css/
-│   │   └── style.css          # Styling
-│   ├── js/
-│   │   └── main.js            # 3D rendering & chat logic
-│   ├── models/                # Place VRM models here
-│   └── index.html             # Main HTML
-├── server.js                  # Express server & Gemini AI
-├── package.json
-├── .env                       # Environment variables (not in git)
-├── .env.example              # Example env file
-├── render.yaml               # Render deployment config
-└── README.md
-```
-
-## Troubleshooting
-
-### Character Not Loading
-
-If the VRM model fails to load, the app will automatically use a fallback 3D character made from basic shapes.
-
-### API Errors
-
-Make sure your Gemini API key is valid and has API access enabled.
-
-### Port Already in Use
-
-Change the PORT in your `.env` file to a different number.
-
-## Credits
-
-- 3D Rendering: [Three.js](https://threejs.org/)
-- VRM Support: [@pixiv/three-vrm](https://github.com/pixiv/three-vrm)
-- AI: [Google Gemini](https://ai.google.dev/)
-
-## License
-
-MIT License - Feel free to use and modify!
-
----
-
-Made with love for waifu enthusiasts everywhere! 💖
